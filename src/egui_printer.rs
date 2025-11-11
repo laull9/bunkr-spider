@@ -55,7 +55,7 @@ impl EguiPrinter {
 #[macro_export]
 macro_rules! egui_print {
     ($($arg:tt)*) => {
-        egui_printer::get_eprinter().lock().unwrap_or_else(|e| e.into_inner()).print(format_args!($($arg)*));
+        egui_printer::get_eprinter().lock().unwrap_or_else(|e| e.into_inner()).print(format_args!($($arg)*))
     };
 }
 
@@ -63,7 +63,7 @@ macro_rules! egui_print {
 #[macro_export]
 macro_rules! egui_println {
     ($($arg:tt)*) => {
-        egui_printer::get_eprinter().lock().unwrap_or_else(|e| e.into_inner()).println(format_args!($($arg)*));
+        egui_printer::get_eprinter().lock().unwrap_or_else(|e| e.into_inner()).println(format_args!($($arg)*))
     };
 }
 
