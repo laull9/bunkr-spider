@@ -2,4 +2,7 @@
 
 ## made with rust, cross-platform
 
+
 ## Have fun.
+
+![preview](./assets/preview.png)
