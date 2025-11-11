@@ -1,104 +1,206 @@
-use spider::website::Website;
-use spider::tokio;
-use fake_useragent::UserAgents;
-use scraper::{Html, Selector};
-use reqwest;
-use std::fs;
-use std::io::Write;
-use futures::stream::{self, StreamExt};
+use crate::bunkr::BunkrSpider;
 
-const CONCURRENT_LIMIT: usize = 8; // 同时下载 8 张图片
-const DEFAULT_DOWNLOAD_DIR: &str = "no_title";
-const LINK_FILTER: &str = "https://i.ibb.co/";
-const TITLE_CSS_FILTER: &str = "#album > div.content-width > div:nth-child(3) > h1 > a";
+mod bunkr;
+mod egui_printer;
 
-#[tokio::main]
-async fn main() {
-    println!("输入 imgbb album 链接 > ");
-    let mut website_name = String::new();
-    std::io::stdin().read_line(&mut website_name).unwrap();
-    // 去除换行符和查询参数
-    let website_name = website_name.trim().split('?').next().unwrap().to_string();
+use eframe::egui;
+use std::{sync::Arc};
+use tokio::sync::Mutex;
 
-    println!("正在解析链接...");
-    let client = reqwest::Client::new();
-    // 标题
-    let mut title = String::new(); 
+const FONT_PIXEL: f32 = 1.3;
 
-    let mut website: Website = Website::new(&website_name);
-    website.with_user_agent(Some(UserAgents::new().random()));
-    website.scrape().await;
-
-    println!("正在提取图片链接...");
-    let mut img_links: Vec<String> = Vec::new();
-    let img_selector = Selector::parse("link").unwrap();
-    let title_selector = Selector::parse(TITLE_CSS_FILTER).unwrap();
-
-    for page in website.get_pages().unwrap() {
-        let html = page.get_html();
-        let document = Html::parse_document(&html);
-
-        // 从href解析图片链接
-        for img in document.select(&img_selector) {
-            if let Some(src) = img.value().attr("href") {
-                if src.starts_with(LINK_FILTER) {
-                    img_links.push(src.to_string());
-                }
-            }
-        }
-        
-        // 解析标题
-        if title.is_empty() {
-            if let Some(title_elem) = document.select(&title_selector).next() {
-                // 去除路径非法字符
-                let _t = title_elem
-                    .inner_html()
-                    .replace("/", "_")
-                    .replace("\\", "_")
-                    .replace(":", "_")
-                ;
-                if !_t.is_empty(){
-                    println!("专辑标题: {}", _t);
-                    title = _t;
-                }
-            }
-        }
-    }
-
-    if title.is_empty() {
-        println!("专辑标题为空，使用默认标题 {}", DEFAULT_DOWNLOAD_DIR);
-        title = DEFAULT_DOWNLOAD_DIR.to_string();
-    }
-    println!("共找到 {} 张图片。开始下载...", img_links.len());
-    fs::create_dir_all(&title).unwrap();
-
-    // 并发下载
-    stream::iter(img_links.into_iter().enumerate())
-        .map(|(_, link)| {
-            let client = client.clone();
-            let title = title.clone();
-            async move {
-                match download_image(&client, title, &link).await {
-                    Ok(_) => println!("✅ 下载成功 {}", link),
-                    Err(e) => eprintln!("❌ 下载失败 {}: {}", link, e),
-                }
-            }
-        })
-        .buffer_unordered(CONCURRENT_LIMIT)
-        .collect::<Vec<_>>()
-        .await;
-
-    println!("所有图片下载完成。");
+// 定义应用状态（存储UI交互的数据）
+#[derive(Clone)]
+struct AppState {
+    spider: Arc<Mutex<BunkrSpider>>,
+    spider_info: Arc<tokio::sync::RwLock<bunkr::BunkrSpiderInformation>>,
 }
 
-async fn download_image(client: &reqwest::Client, download_dir: String, url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let resp = client.get(url).send().await?.bytes().await?;
-    let filename = format!(
-        "{}/{}", 
-        download_dir,
-        url.rsplit('/').next().unwrap_or("image")
-    );
-    let mut file = fs::File::create(&filename)?;
-    file.write_all(&resp)?;
-    Ok(())
+struct GUI {
+    state: AppState,
+    base_dir: String,
+    text_input_url: String,
+    checked_delete_errorfile: bool,
+}
+
+// 实现 eframe 的 App trait（核心入口）
+impl eframe::App for GUI {
+    // 每帧绘制UI的核心方法
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Bunkr Spider @laull");
+            if ui.link("My Website: laull.top").clicked() {
+                
+            }
+            ui.separator();
+            if ui.button("test").clicked(){
+                egui_println!("测试打印输出行 1");
+                egui_print!("测试打印输出行 2，无换行... ");
+                egui_println!("继续输出行 2，有换行");
+            }
+
+            ui.label("下载目录：");
+            ui.text_edit_singleline(&mut self.base_dir);
+            
+            ui.label("Url: ");
+            ui.text_edit_singleline(&mut self.text_input_url);
+
+            ui.checkbox(&mut self.checked_delete_errorfile, "删除无效文件");
+
+            // 获取当前状态
+            let state = self.state.spider.try_lock()
+                .map(|spider| spider.get_state())
+                .unwrap_or(bunkr::BunkrSpiderState::Idle);
+            
+            // 显示进度信息
+            if let Ok(info) = self.state.spider_info.try_read() {
+                if let Some(total) = info.total_sources {
+                    if let Some(downloaded) = info.downloaded_sources {
+                        let progress_percent = if total > 0 {
+                            (downloaded as f32 / total as f32 * 100.0) as u32
+                        } else {
+                            0
+                        };
+                        ui.label(format!("进度: {}/{} ({}%)", downloaded, total, progress_percent));
+                    }
+                }
+            }
+            
+            match state {
+                bunkr::BunkrSpiderState::Idle => {
+                    ui.label("当前状态：空闲");
+                }
+                bunkr::BunkrSpiderState::Analyzing => {
+                    ui.label("当前状态：分析...");
+                }
+                bunkr::BunkrSpiderState::Downloading => {
+                    ui.label("当前状态：下载中...");
+                }
+                bunkr::BunkrSpiderState::Finished => {
+                    ui.label("当前状态：已完成");
+                }
+            }
+
+            if state == bunkr::BunkrSpiderState::Idle {
+                if ui.button("运行").clicked() {
+                    let state = self.state.clone();
+                    let url = self.text_input_url.clone();
+                    let delete_error = self.checked_delete_errorfile;
+                    let base_dir = self.base_dir.clone();
+                    let spider_info = self.state.spider_info.clone();
+                    // 用 spawn_blocking 规避 Send 限制
+                    tokio::task::spawn_blocking(move || {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async move {
+                            let mut lock = state.spider.lock().await;
+                            let _info = lock.run(base_dir, url).await;
+                            // 同步 spider 内部的 info 到共享的 spider_info
+                            if let Some(info) = lock.get_info() {
+                                if let Ok(mut shared_info) = spider_info.try_write() {
+                                    *shared_info = info;
+                                }
+                            }
+                            lock.download_all().await.ok();
+                            // 再次同步以更新最终状态
+                            if let Some(info) = lock.get_info() {
+                                if let Ok(mut shared_info) = spider_info.try_write() {
+                                    *shared_info = info;
+                                }
+                            }
+                            if delete_error {
+                                lock.clean_error_files().await;
+                            }
+                        });
+                    });
+                }
+            }
+            else if state == bunkr::BunkrSpiderState::Finished {
+                if ui.button("新下载").clicked() {
+                    let spider = self.state.spider.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async move {
+                            let mut lock = spider.lock().await;
+                            lock.reset();
+                        });
+                    });
+                }
+            }
+            else{
+                if ui.button("停止").clicked() {
+                    let spider = self.state.spider.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async move {
+                            let lock = spider.lock().await;
+                            lock.stop();
+                        });
+                    });
+                }
+            }
+
+            ui.label("打印输出：");
+            let mut printer =  egui_printer::get_eprinter()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+            printer.show(ui, Some(400.0), None);
+        });
+    }
+}
+
+impl GUI {
+    // 初始化默认状态
+    fn new(_ctx: &egui::Context) -> Self {
+
+        let custom_font_data = include_bytes!("../font/LXGWWenKaiLite-Regular3500+.ttf");
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "CustomFont".to_string(),
+            egui::FontData::from_owned(custom_font_data.to_vec().into()).into(),
+        );
+
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "CustomFont".to_string());
+
+        _ctx.set_fonts(fonts);
+
+        _ctx.set_pixels_per_point(FONT_PIXEL);
+
+        Self {
+            state: AppState {
+                spider: Arc::new(Mutex::new(BunkrSpider::new())),
+                spider_info: Arc::new(tokio::sync::RwLock::new(bunkr::BunkrSpiderInformation {
+                    total_sources: None,
+                    downloaded_sources: None,
+                    state: bunkr::BunkrSpiderState::Idle,
+                })),
+            },
+            text_input_url: String::new(),
+            checked_delete_errorfile: true,
+            base_dir: String::new(),
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), eframe::Error> {
+    let options = eframe::NativeOptions {
+        window_builder: Some(Box::new(|viewport_builder| {
+            viewport_builder
+            .with_inner_size(egui::vec2(400.0, 500.0))
+        })),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "Bunkr Spider @laull",
+        options,
+        // 从 CreationContext 中提取 egui::Context
+        Box::new(|creation_ctx| 
+            Ok(Box::new(GUI::new(&creation_ctx.egui_ctx)))),
+    )
 }
