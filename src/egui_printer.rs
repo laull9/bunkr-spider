@@ -1,24 +1,21 @@
 use egui::{Id, TextEdit, Ui};
 use std::fmt::{self, Write};
 
-/// 类 print! 的 Egui 打印器
 #[derive(Default)]
 pub struct EguiPrinter {
     buffer: String,
 }
 
 impl EguiPrinter {
-    /// 创建新的打印器
+
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 模拟 print!：追加内容（不自动换行）
     pub fn print(&mut self, args: fmt::Arguments) {
-        let _ = write!(self.buffer, "{}", args);  // 向缓冲区写入格式化内容
+        let _ = write!(self.buffer, "{}", args);
     }
 
-    /// 模拟 println!：追加内容（自动换行）
     pub fn println(&mut self, args: fmt::Arguments) {
         let _ = writeln!(self.buffer, "{}", args);
     }
@@ -55,7 +52,6 @@ impl EguiPrinter {
     }
 }
 
-/// Egui 版 print!（不换行）
 #[macro_export]
 macro_rules! egui_print {
     ($($arg:tt)*) => {
@@ -64,7 +60,6 @@ macro_rules! egui_print {
 }
 
 
-/// Egui 版 println!（换行）
 #[macro_export]
 macro_rules! egui_println {
     ($($arg:tt)*) => {

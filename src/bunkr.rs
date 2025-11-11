@@ -64,6 +64,15 @@ impl BunkrSpider{
         }
     }
 
+    /// Construct a BunkrSpider that shares the provided `info` Arc.
+    /// This allows the UI to read the same internal state while the spider
+    /// holds its own lock during long-running operations.
+    pub fn with_info(info: Arc<tokio::sync::RwLock<BunkrSpiderInformation>>) -> BunkrSpider {
+        let mut s = BunkrSpider::new();
+        s.info = info;
+        s
+    }
+
     pub async fn run(&mut self, base_dir: String, url: String) -> Arc<tokio::sync::RwLock<BunkrSpiderInformation>> {
         self.base_dir = base_dir;
 
@@ -75,7 +84,10 @@ impl BunkrSpider{
             info.state = BunkrSpiderState::Analyzing;
         }
 
+        // 在持有锁期间定期释放，允许GUI读取
         self.website.scrape().await;
+        // 释放锁，让GUI能读取状态
+        tokio::task::yield_now().await;
 
         let meta_type_selector = Selector::parse("head > meta:nth-child(5)").unwrap();
         let meta_title_selector = Selector::parse("head > meta:nth-child(6)").unwrap();
@@ -84,7 +96,7 @@ impl BunkrSpider{
             "body > main:nth-child(11) > figure > img.max-h-full.w-auto.object-cover.relative.z-20"
         ).unwrap();
 
-        for page in self.website.get_pages().unwrap() {
+        for (page_count, page) in self.website.get_pages().unwrap().iter().enumerate() {
             let html = page.get_html();
             let document = Html::parse_document(&html);
 
@@ -144,6 +156,11 @@ impl BunkrSpider{
                         }
                     }
                 }
+            }
+            
+            // 每处理几个页面就释放一次锁，让 GUI 能更新状态
+            if page_count % 5 == 0 {
+                tokio::task::yield_now().await;
             }
         }
 

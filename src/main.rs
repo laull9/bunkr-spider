@@ -6,10 +6,11 @@ mod egui_printer;
 use eframe::egui;
 use std::{sync::Arc};
 use tokio::sync::Mutex;
+use rfd::{FileDialog};
 
 const FONT_PIXEL: f32 = 1.3;
 
-// 定义应用状态（存储UI交互的数据）
+
 #[derive(Clone)]
 struct AppState {
     spider: Arc<Mutex<BunkrSpider>>,
@@ -23,35 +24,46 @@ struct GUI {
     checked_delete_errorfile: bool,
 }
 
-// 实现 eframe 的 App trait（核心入口）
+
 impl eframe::App for GUI {
     // 每帧绘制UI的核心方法
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Bunkr Spider @laull");
-            if ui.link("My Website: laull.top").clicked() {
-                
+            if ui.link("My Website: laull.top").clicked(){
+                egui::OpenUrl::new_tab("https://laull.top");
             }
             ui.separator();
-            if ui.button("test").clicked(){
-                egui_println!("测试打印输出行 1");
-                egui_print!("测试打印输出行 2，无换行... ");
-                egui_println!("继续输出行 2，有换行");
-            }
 
-            ui.label("下载目录：");
+            ui.horizontal(|ui|{      
+                ui.label("下载目录：");
+                if ui.button("选择文件夹").clicked() {
+                    // 打开本地文件夹选择框
+                    let selected = FileDialog::new()
+                        .set_title("选择下载文件夹")
+                        .pick_folder();
+
+                    self.base_dir = selected.map(
+                        |path| path.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                }
+            });
             ui.text_edit_singleline(&mut self.base_dir);
-            
+
             ui.label("Url: ");
             ui.text_edit_singleline(&mut self.text_input_url);
 
             ui.checkbox(&mut self.checked_delete_errorfile, "删除无效文件");
 
             // 获取当前状态
-            let state = self.state.spider.try_lock()
-                .map(|spider| spider.get_state())
-                .unwrap_or(bunkr::BunkrSpiderState::Idle);
+            let state = if let Ok(spider_guard) = self.state.spider.try_lock() {
+                    spider_guard.get_state()
+                } else if let Ok(info) = self.state.spider_info.try_read() {
+                    info.state
+                } else {
+                    bunkr::BunkrSpiderState::Idle
+                };
             
             // 显示进度信息
             if let Ok(info) = self.state.spider_info.try_read() {
@@ -66,22 +78,7 @@ impl eframe::App for GUI {
                     }
                 }
             }
-            
-            match state {
-                bunkr::BunkrSpiderState::Idle => {
-                    ui.label("当前状态：空闲");
-                }
-                bunkr::BunkrSpiderState::Analyzing => {
-                    ui.label("当前状态：分析...");
-                }
-                bunkr::BunkrSpiderState::Downloading => {
-                    ui.label("当前状态：下载中...");
-                }
-                bunkr::BunkrSpiderState::Finished => {
-                    ui.label("当前状态：已完成");
-                }
-            }
-
+            ui.horizontal(|ui|{
             if state == bunkr::BunkrSpiderState::Idle {
                 if ui.button("运行").clicked() {
                     let state = self.state.clone();
@@ -89,26 +86,40 @@ impl eframe::App for GUI {
                     let delete_error = self.checked_delete_errorfile;
                     let base_dir = self.base_dir.clone();
                     let spider_info = self.state.spider_info.clone();
-                    // 直接创建异步任务
-                    tokio::task::spawn(async move {
-                        let mut lock = state.spider.lock().await;
-                        let _info = lock.run(base_dir, url).await;
-                        // 同步 spider 内部的 info 到共享的 spider_info
-                        if let Some(info) = lock.get_info() {
-                            if let Ok(mut shared_info) = spider_info.try_write() {
-                                *shared_info = info;
+                    
+                    std::thread::spawn(move || {
+                        
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async {
+                            
+                            {
+                                let mut lock = state.spider.lock().await;
+                                let _info = lock.run(base_dir.clone(), url).await;
+                                
+                                if let Some(info) = lock.get_info() {
+                                    if let Ok(mut shared_info) = spider_info.try_write() {
+                                        *shared_info = info;
+                                    }
+                                }
                             }
-                        }
-                        lock.download_all().await.ok();
-                        // 再次同步以更新最终状态
-                        if let Some(info) = lock.get_info() {
-                            if let Ok(mut shared_info) = spider_info.try_write() {
-                                *shared_info = info;
+                            
+                            
+                            {
+                                let mut lock = state.spider.lock().await;
+                                lock.download_all().await.ok();
+                                
+                                if let Some(info) = lock.get_info() {
+                                    if let Ok(mut shared_info) = spider_info.try_write() {
+                                        *shared_info = info;
+                                    }
+                                }
                             }
-                        }
-                        if delete_error {
-                            lock.clean_error_files().await;
-                        }
+                            
+                            if delete_error {
+                                let lock = state.spider.lock().await;
+                                lock.clean_error_files().await;
+                            }
+                        });
                     });
                 }
             }
@@ -131,6 +142,22 @@ impl eframe::App for GUI {
                 }
             }
 
+            match state {
+                bunkr::BunkrSpiderState::Idle => {
+                    ui.label("当前状态：空闲");
+                }
+                bunkr::BunkrSpiderState::Analyzing => {
+                    ui.label("当前状态：分析...");
+                }
+                bunkr::BunkrSpiderState::Downloading => {
+                    ui.label("当前状态：下载中...");
+                }
+                bunkr::BunkrSpiderState::Finished => {
+                    ui.label("当前状态：已完成");
+                }
+            }
+            });
+            
             ui.label("打印输出：");
             let mut printer =  egui_printer::get_eprinter()
                     .lock()
@@ -161,14 +188,18 @@ impl GUI {
 
         _ctx.set_pixels_per_point(FONT_PIXEL);
 
+        let spider_info = Arc::new(tokio::sync::RwLock::new(bunkr::BunkrSpiderInformation {
+            total_sources: None,
+            downloaded_sources: None,
+            state: bunkr::BunkrSpiderState::Idle,
+        }));
+
+        let spider = Arc::new(Mutex::new(BunkrSpider::with_info(spider_info.clone())));
+
         Self {
             state: AppState {
-                spider: Arc::new(Mutex::new(BunkrSpider::new())),
-                spider_info: Arc::new(tokio::sync::RwLock::new(bunkr::BunkrSpiderInformation {
-                    total_sources: None,
-                    downloaded_sources: None,
-                    state: bunkr::BunkrSpiderState::Idle,
-                })),
+                spider,
+                spider_info,
             },
             text_input_url: String::new(),
             checked_delete_errorfile: true,
@@ -190,7 +221,7 @@ async fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Bunkr Spider @laull",
         options,
-        // 从 CreationContext 中提取 egui::Context
+
         Box::new(|creation_ctx| 
             Ok(Box::new(GUI::new(&creation_ctx.egui_ctx)))),
     )
