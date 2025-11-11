@@ -89,53 +89,44 @@ impl eframe::App for GUI {
                     let delete_error = self.checked_delete_errorfile;
                     let base_dir = self.base_dir.clone();
                     let spider_info = self.state.spider_info.clone();
-                    // 用 spawn_blocking 规避 Send 限制
-                    tokio::task::spawn_blocking(move || {
-                        let rt = tokio::runtime::Runtime::new().unwrap();
-                        rt.block_on(async move {
-                            let mut lock = state.spider.lock().await;
-                            let _info = lock.run(base_dir, url).await;
-                            // 同步 spider 内部的 info 到共享的 spider_info
-                            if let Some(info) = lock.get_info() {
-                                if let Ok(mut shared_info) = spider_info.try_write() {
-                                    *shared_info = info;
-                                }
+                    // 直接创建异步任务
+                    tokio::task::spawn(async move {
+                        let mut lock = state.spider.lock().await;
+                        let _info = lock.run(base_dir, url).await;
+                        // 同步 spider 内部的 info 到共享的 spider_info
+                        if let Some(info) = lock.get_info() {
+                            if let Ok(mut shared_info) = spider_info.try_write() {
+                                *shared_info = info;
                             }
-                            lock.download_all().await.ok();
-                            // 再次同步以更新最终状态
-                            if let Some(info) = lock.get_info() {
-                                if let Ok(mut shared_info) = spider_info.try_write() {
-                                    *shared_info = info;
-                                }
+                        }
+                        lock.download_all().await.ok();
+                        // 再次同步以更新最终状态
+                        if let Some(info) = lock.get_info() {
+                            if let Ok(mut shared_info) = spider_info.try_write() {
+                                *shared_info = info;
                             }
-                            if delete_error {
-                                lock.clean_error_files().await;
-                            }
-                        });
+                        }
+                        if delete_error {
+                            lock.clean_error_files().await;
+                        }
                     });
                 }
             }
             else if state == bunkr::BunkrSpiderState::Finished {
                 if ui.button("新下载").clicked() {
                     let spider = self.state.spider.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let rt = tokio::runtime::Runtime::new().unwrap();
-                        rt.block_on(async move {
-                            let mut lock = spider.lock().await;
-                            lock.reset();
-                        });
+                    tokio::task::spawn(async move {
+                        let mut lock = spider.lock().await;
+                        lock.reset();
                     });
                 }
             }
             else{
                 if ui.button("停止").clicked() {
                     let spider = self.state.spider.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let rt = tokio::runtime::Runtime::new().unwrap();
-                        rt.block_on(async move {
-                            let lock = spider.lock().await;
-                            lock.stop();
-                        });
+                    tokio::task::spawn(async move {
+                        let lock = spider.lock().await;
+                        lock.stop();
                     });
                 }
             }

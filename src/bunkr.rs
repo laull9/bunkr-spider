@@ -203,14 +203,18 @@ impl BunkrSpider{
         let should_stop = Arc::clone(&self.should_stop);
         let info = Arc::clone(&self.info);
 
-        let downloads = stream::iter(self.sources.iter().enumerate())
-            .map(|(index, (name, url))| {
+        // 创建所有权版本的 sources 向量，避免生命周期问题
+        let sources_owned: Vec<_> = self.sources
+            .iter()
+            .map(|(name, url)| (name.clone(), url.clone()))
+            .collect();
+
+        let downloads = stream::iter(sources_owned.into_iter().enumerate())
+            .map(move |(index, (name, url))| {
                 let client = Arc::clone(&client);
                 let should_stop = Arc::clone(&should_stop);
                 let info = Arc::clone(&info);
                 let dir = download_dir.clone();
-                let url = url.clone();
-                let name = name.clone();
 
                 async move {
                     if should_stop.load(Ordering::Relaxed) {
