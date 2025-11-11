@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use rfd::{FileDialog};
 
 const FONT_PIXEL: f32 = 1.3;
-
+const BIG_BUTTON_SIZE: egui::Vec2 = egui::Vec2::new(100.0, 25.0);
 
 #[derive(Clone)]
 struct AppState {
@@ -22,6 +22,7 @@ struct GUI {
     base_dir: String,
     text_input_url: String,
     checked_delete_errorfile: bool,
+    using_english: bool
 }
 
 
@@ -30,18 +31,25 @@ impl eframe::App for GUI {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Bunkr Spider @laull");
-            if ui.link("My Website: laull.top").clicked(){
-                egui::OpenUrl::new_tab("https://laull.top");
-            }
+            ui.heading(self.ltext(
+                "A Bunkr Spider to download imgs and videos with an album url. Author: laull", 
+                "Bunkr 爬虫, 可根据专辑批量下载图片和视频 作者: laull"));
+
+            ui.hyperlink_to(self.ltext(
+                "Click to Visit My Website(laull.top) For More Details",
+                "点击访问个人网站(laull.top) 获取更多信息"
+            ), 
+            "https://laull.top/article/8bc5fd18-a180-4704-b8fd-c64497615472");
+
+            ui.checkbox(&mut self.using_english, "Use English");
             ui.separator();
 
             ui.horizontal(|ui|{      
-                ui.label("下载目录：");
-                if ui.button("选择文件夹").clicked() {
+                ui.label(self.ltext("Download Directory:", "下载目录："));
+                if ui.button(self.ltext("Select Folder", "选择文件夹")).clicked() {
                     // 打开本地文件夹选择框
                     let selected = FileDialog::new()
-                        .set_title("选择下载文件夹")
+                        .set_title(self.ltext("Select Download Folder", "选择下载文件夹"))
                         .pick_folder();
 
                     self.base_dir = selected.map(
@@ -51,10 +59,11 @@ impl eframe::App for GUI {
             });
             ui.text_edit_singleline(&mut self.base_dir);
 
-            ui.label("Url: ");
+            ui.label(self.ltext("Bunkr Album Url:", "Bunkr 专辑网址: "));
             ui.text_edit_singleline(&mut self.text_input_url);
 
-            ui.checkbox(&mut self.checked_delete_errorfile, "删除无效文件");
+            let delete_invalid_label = self.ltext("Delete Invalid Files", "删除无效文件");
+            ui.checkbox(&mut self.checked_delete_errorfile, delete_invalid_label);
 
             // 获取当前状态
             let state = if let Ok(spider_guard) = self.state.spider.try_lock() {
@@ -74,13 +83,15 @@ impl eframe::App for GUI {
                         } else {
                             0
                         };
-                        ui.label(format!("进度: {}/{} ({}%)", downloaded, total, progress_percent));
+                        ui.label(format!("{} {}/{} ({}%)", self.ltext("Progress:", "进度:"), downloaded, total, progress_percent));
                     }
                 }
             }
             ui.horizontal(|ui|{
             if state == bunkr::BunkrSpiderState::Idle {
-                if ui.button("运行").clicked() {
+                if ui.add_sized(BIG_BUTTON_SIZE, 
+                    egui::Button::new(self.ltext("Run", "运行")))
+                    .clicked() {
                     let state = self.state.clone();
                     let url = self.text_input_url.clone();
                     let delete_error = self.checked_delete_errorfile;
@@ -124,7 +135,9 @@ impl eframe::App for GUI {
                 }
             }
             else if state == bunkr::BunkrSpiderState::Finished {
-                if ui.button("新下载").clicked() {
+                if ui.add_sized(BIG_BUTTON_SIZE, 
+                    egui::Button::new(self.ltext("New Download", "新下载")))
+                    .clicked() {
                     let spider = self.state.spider.clone();
                     tokio::task::spawn(async move {
                         let mut lock = spider.lock().await;
@@ -133,7 +146,9 @@ impl eframe::App for GUI {
                 }
             }
             else{
-                if ui.button("停止").clicked() {
+                if ui.add_sized(BIG_BUTTON_SIZE, 
+                    egui::Button::new(self.ltext("Stop", "停止")))
+                    .clicked() {
                     let spider = self.state.spider.clone();
                     tokio::task::spawn(async move {
                         let lock = spider.lock().await;
@@ -144,21 +159,24 @@ impl eframe::App for GUI {
 
             match state {
                 bunkr::BunkrSpiderState::Idle => {
-                    ui.label("当前状态：空闲");
+                    ui.label(self.ltext("Current State: Idle", "当前状态：空闲"));
                 }
                 bunkr::BunkrSpiderState::Analyzing => {
-                    ui.label("当前状态：分析...");
+                    ui.label(self.ltext("Current State: Analyzing...", "当前状态：分析..."));
                 }
                 bunkr::BunkrSpiderState::Downloading => {
-                    ui.label("当前状态：下载中...");
+                    ui.label(self.ltext("Current State: Downloading...", "当前状态：下载中..."));
                 }
                 bunkr::BunkrSpiderState::Finished => {
-                    ui.label("当前状态：已完成");
+                    ui.label(self.ltext("Current State: Finished", "当前状态：已完成"));
                 }
             }
             });
             
-            ui.label("打印输出：");
+            ui.label(self.ltext(
+                "Log Output:",
+                "日志输出："
+            ));
             let mut printer =  egui_printer::get_eprinter()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
@@ -171,7 +189,7 @@ impl GUI {
     // 初始化默认状态
     fn new(_ctx: &egui::Context) -> Self {
 
-        let custom_font_data = include_bytes!("../font/LXGWWenKaiLite-Regular3500+.ttf");
+        let custom_font_data = include_bytes!("../font/LXGWWenKaiLite-Regular.ttf");
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
             "CustomFont".to_string(),
@@ -204,6 +222,15 @@ impl GUI {
             text_input_url: String::new(),
             checked_delete_errorfile: true,
             base_dir: String::new(),
+            using_english: false
+        }
+    }
+
+    fn ltext<'a>(&self, en: &'a str, zh: &'a str) -> &'a str {
+        if self.using_english {
+            en
+        } else {
+            zh
         }
     }
 }
